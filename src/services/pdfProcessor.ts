@@ -1,6 +1,6 @@
 import { PDFDocument } from 'pdf-lib';
 import { PaperSize, PageArrangement } from '../types';
-import { paperSizeToPoints } from '../utils/paperSizes';
+import { paperSizeToPoints, mmToPoints } from '../utils/paperSizes';
 
 export async function loadPDF(file: File): Promise<PDFDocument> {
   const arrayBuffer = await file.arrayBuffer();
