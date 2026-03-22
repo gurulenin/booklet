@@ -66,15 +66,49 @@ export function calculatePageArrangement(
   return arrangement;
 }
 
-export async function generateA5BookletPDF(
+const A5_WIDTH_PT = mmToPoints(148);
+const A5_HEIGHT_PT = mmToPoints(210);
+
+export function canFitFourA5Pages(targetPaper: PaperSize): boolean {
+  const { width: tw, height: th } = paperSizeToPoints(targetPaper);
+  const fitPortrait = tw >= A5_WIDTH_PT * 2 && th >= A5_HEIGHT_PT * 2;
+  const fitLandscape = tw >= A5_HEIGHT_PT * 2 && th >= A5_WIDTH_PT * 2;
+  return fitPortrait || fitLandscape;
+}
+
+async function drawA5Page(
+  outputPdf: PDFDocument,
   sourcePdf: PDFDocument,
-  spacingMm: number = 0
+  sheet: ReturnType<PDFDocument['addPage']>,
+  pageIdx: number,
+  totalPages: number,
+  x: number,
+  y: number,
+  slotWidth: number,
+  slotHeight: number
+) {
+  if (pageIdx < 0 || pageIdx >= totalPages) return;
+  const [embedded] = await outputPdf.embedPdf(sourcePdf, [pageIdx]);
+  const scale = Math.min((slotWidth * 0.95) / A5_WIDTH_PT, (slotHeight * 0.95) / A5_HEIGHT_PT);
+  const scaledW = A5_WIDTH_PT * scale;
+  const scaledH = A5_HEIGHT_PT * scale;
+  const xOffset = x + (slotWidth - scaledW) / 2;
+  const yOffset = y + (slotHeight - scaledH) / 2;
+  sheet.drawPage(embedded, { x: xOffset, y: yOffset, width: scaledW, height: scaledH });
+}
+
+async function generateA5Booklet2Up(
+  sourcePdf: PDFDocument,
+  targetPaper: PaperSize,
+  spacingMm: number
 ): Promise<Uint8Array> {
   const outputPdf = await PDFDocument.create();
   const totalPages = sourcePdf.getPageCount();
+  const { width: targetWidth, height: targetHeight } = paperSizeToPoints(targetPaper);
+  const spacingPoints = mmToPoints(spacingMm);
 
   const paddedTotal = Math.ceil(totalPages / 4) * 4;
-  const bookletOrder: (number | null)[] = [];
+  const bookletOrder: number[] = [];
 
   let lo = 0;
   let hi = paddedTotal - 1;
@@ -89,43 +123,73 @@ export async function generateA5BookletPDF(
     hi--;
   }
 
-  const targetWidth = inchesToPoints(19);
-  const targetHeight = inchesToPoints(13);
-  const spacingPoints = mmToPoints(spacingMm);
+  const slotWidth = (targetWidth - spacingPoints) / 2;
+  const slotHeight = targetHeight;
 
-  const a5WidthMm = 148;
-  const a5HeightMm = 210;
-  const a5Width = mmToPoints(a5WidthMm);
-  const a5Height = mmToPoints(a5HeightMm);
-
-  const availableWidth = (targetWidth - spacingPoints) / 2;
-  const scale = Math.min(
-    (availableWidth * 0.95) / a5Width,
-    (targetHeight * 0.95) / a5Height
-  );
-
-  const scaledW = a5Width * scale;
-  const scaledH = a5Height * scale;
-
-  for (let sheetSide = 0; sheetSide < bookletOrder.length; sheetSide += 2) {
-    const leftPageIdx = bookletOrder[sheetSide];
-    const rightPageIdx = bookletOrder[sheetSide + 1];
-
+  for (let i = 0; i < bookletOrder.length; i += 2) {
     const sheet = outputPdf.addPage([targetWidth, targetHeight]);
-
-    const drawSlot = async (pageIdx: number | null, slotX: number) => {
-      if (pageIdx === null || pageIdx >= totalPages || pageIdx < 0) return;
-      const [embedded] = await outputPdf.embedPdf(sourcePdf, [pageIdx]);
-      const xOffset = slotX + (availableWidth - scaledW) / 2;
-      const yOffset = (targetHeight - scaledH) / 2;
-      sheet.drawPage(embedded, { x: xOffset, y: yOffset, width: scaledW, height: scaledH });
-    };
-
-    await drawSlot(leftPageIdx, 0);
-    await drawSlot(rightPageIdx, availableWidth + spacingPoints);
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i], totalPages, 0, 0, slotWidth, slotHeight);
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i + 1], totalPages, slotWidth + spacingPoints, 0, slotWidth, slotHeight);
   }
 
   return await outputPdf.save();
+}
+
+async function generateA5Booklet4Up(
+  sourcePdf: PDFDocument,
+  targetPaper: PaperSize,
+  spacingMm: number
+): Promise<Uint8Array> {
+  const outputPdf = await PDFDocument.create();
+  const totalPages = sourcePdf.getPageCount();
+  const { width: targetWidth, height: targetHeight } = paperSizeToPoints(targetPaper);
+  const spacingPoints = mmToPoints(spacingMm);
+
+  const paddedTotal = Math.ceil(totalPages / 4) * 4;
+  const bookletOrder: number[] = [];
+
+  let lo = 0;
+  let hi = paddedTotal - 1;
+  while (lo <= hi) {
+    bookletOrder.push(hi);
+    bookletOrder.push(lo);
+    lo++;
+    hi--;
+    bookletOrder.push(lo);
+    bookletOrder.push(hi);
+    lo++;
+    hi--;
+  }
+
+  const slotWidth = (targetWidth - spacingPoints) / 2;
+  const slotHeight = (targetHeight - spacingPoints) / 2;
+
+  for (let i = 0; i < bookletOrder.length; i += 4) {
+    const sheet = outputPdf.addPage([targetWidth, targetHeight]);
+
+    const topY = slotHeight + spacingPoints;
+    const bottomY = 0;
+    const leftX = 0;
+    const rightX = slotWidth + spacingPoints;
+
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i], totalPages, leftX, topY, slotWidth, slotHeight);
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i + 1], totalPages, rightX, topY, slotWidth, slotHeight);
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i + 2], totalPages, leftX, bottomY, slotWidth, slotHeight);
+    await drawA5Page(outputPdf, sourcePdf, sheet, bookletOrder[i + 3], totalPages, rightX, bottomY, slotWidth, slotHeight);
+  }
+
+  return await outputPdf.save();
+}
+
+export async function generateA5BookletPDF(
+  sourcePdf: PDFDocument,
+  targetPaper: PaperSize,
+  spacingMm: number = 0
+): Promise<Uint8Array> {
+  if (canFitFourA5Pages(targetPaper)) {
+    return generateA5Booklet4Up(sourcePdf, targetPaper, spacingMm);
+  }
+  return generateA5Booklet2Up(sourcePdf, targetPaper, spacingMm);
 }
 
 export async function generateArrangedPDF(

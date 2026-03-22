@@ -3,11 +3,15 @@ import { FileUp, Download, Printer } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import { PaperSize, PageArrangement } from './types';
 import { PAPER_SIZES } from './utils/paperSizes';
-import { loadPDF, calculatePageArrangement, generateArrangedPDF, generateA5BookletPDF } from './services/pdfProcessor';
+import { loadPDF, calculatePageArrangement, generateArrangedPDF, generateA5BookletPDF, canFitFourA5Pages } from './services/pdfProcessor';
 import { PaperSizeSelector } from './components/PaperSizeSelector';
 import { ArrangementPreview } from './components/ArrangementPreview';
 
 type Mode = 'standard' | 'a5-booklet';
+
+const A5_BOOKLET_TARGET_SIZES = PAPER_SIZES.filter(p =>
+  ['A4 Landscape', 'A3', 'A3 Landscape', '11x17', '13x19', '13x19 Landscape'].includes(p.name)
+);
 
 function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -15,6 +19,9 @@ function App() {
   const [totalPages, setTotalPages] = useState<number>(0);
   const [sourcePaper, setSourcePaper] = useState<PaperSize>(PAPER_SIZES[3]);
   const [targetPaper, setTargetPaper] = useState<PaperSize>(PAPER_SIZES[10]);
+  const [a5TargetPaper, setA5TargetPaper] = useState<PaperSize>(
+    PAPER_SIZES.find(p => p.name === '13x19') ?? PAPER_SIZES[10]
+  );
   const [arrangement, setArrangement] = useState<PageArrangement[]>([]);
   const [processing, setProcessing] = useState(false);
   const [spacing, setSpacing] = useState(10);
@@ -61,7 +68,7 @@ function App() {
       let outputPdfBytes: Uint8Array;
 
       if (mode === 'a5-booklet') {
-        outputPdfBytes = await generateA5BookletPDF(sourcePdf, spacing);
+        outputPdfBytes = await generateA5BookletPDF(sourcePdf, a5TargetPaper, spacing);
       } else {
         if (arrangement.length === 0) return;
         outputPdfBytes = await generateArrangedPDF(sourcePdf, targetPaper, arrangement, spacing);
@@ -185,6 +192,31 @@ function App() {
                   </>
                 )}
 
+                {mode === 'a5-booklet' && (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">Output Paper Size</label>
+                    <select
+                      value={a5TargetPaper.name}
+                      onChange={(e) => {
+                        const found = A5_BOOKLET_TARGET_SIZES.find(p => p.name === e.target.value);
+                        if (found) setA5TargetPaper(found);
+                      }}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                    >
+                      {A5_BOOKLET_TARGET_SIZES.map(size => (
+                        <option key={size.name} value={size.name}>
+                          {size.name} ({size.width} × {size.height} {size.unit})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500">
+                      Layout: <span className="font-medium text-gray-700">
+                        {canFitFourA5Pages(a5TargetPaper) ? '4-up (2×2 grid per sheet)' : '2-up (side by side per sheet)'}
+                      </span>
+                    </p>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-gray-700">
                     Space Between Pages (mm): {spacing}
@@ -218,7 +250,7 @@ function App() {
               <div className="bg-gray-50 rounded-lg p-6">
                 {mode === 'a5-booklet' ? (
                   <>
-                    <h3 className="font-semibold text-gray-800 mb-3">A5 to 13x19 Booklet Mode</h3>
+                    <h3 className="font-semibold text-gray-800 mb-3">A5 Booklet Mode</h3>
                     <ol className="space-y-3 text-sm text-gray-600">
                       <li className="flex gap-3">
                         <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">1</span>
@@ -226,27 +258,39 @@ function App() {
                       </li>
                       <li className="flex gap-3">
                         <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
-                        <span>Adjust spacing between pages if needed</span>
+                        <span>Choose the output paper size for printing</span>
                       </li>
                       <li className="flex gap-3">
                         <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">3</span>
-                        <span>Download the output — pages will be rearranged in booklet imposition order, 2-up on 13x19 landscape sheets</span>
+                        <span>Download — pages will be rearranged in booklet imposition order on the selected paper</span>
                       </li>
                       <li className="flex gap-3">
                         <span className="flex-shrink-0 w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">4</span>
-                        <span>Print duplex, fold, and saddle-stitch to create a finished booklet</span>
+                        <span>Print duplex, fold, and saddle-stitch to finish</span>
                       </li>
                     </ol>
                     <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                      <p className="text-sm text-gray-700">
-                        <strong>Example:</strong> For a 16-page A5 booklet:
-                      </p>
-                      <ul className="mt-2 text-xs text-gray-600 space-y-1 ml-4">
-                        <li>• Sheet 1 front: page 16 (left) + page 1 (right)</li>
-                        <li>• Sheet 1 back: page 2 (left) + page 15 (right)</li>
-                        <li>• Sheet 2 front: page 14 (left) + page 3 (right)</li>
-                        <li>• Sheet 2 back: page 4 (left) + page 13 (right)</li>
-                      </ul>
+                      {canFitFourA5Pages(a5TargetPaper) ? (
+                        <>
+                          <p className="text-sm text-gray-700 font-medium">4-up layout on {a5TargetPaper.name}</p>
+                          <p className="mt-1 text-xs text-gray-600">2 columns × 2 rows per sheet. Each sheet holds 4 A5 pages.</p>
+                          <ul className="mt-2 text-xs text-gray-600 space-y-1 ml-4">
+                            <li>• Sheet 1: pages 16, 1 (top) + 2, 15 (bottom)</li>
+                            <li>• Sheet 2: pages 14, 3 (top) + 4, 13 (bottom)</li>
+                            <li>• Sheet 3: pages 12, 5 (top) + 6, 11 (bottom)</li>
+                          </ul>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-gray-700 font-medium">2-up layout on {a5TargetPaper.name}</p>
+                          <p className="mt-1 text-xs text-gray-600">2 A5 pages side by side per sheet in booklet order.</p>
+                          <ul className="mt-2 text-xs text-gray-600 space-y-1 ml-4">
+                            <li>• Sheet 1 front: page 16 (left) + page 1 (right)</li>
+                            <li>• Sheet 1 back: page 2 (left) + page 15 (right)</li>
+                            <li>• Sheet 2 front: page 14 (left) + page 3 (right)</li>
+                          </ul>
+                        </>
+                      )}
                     </div>
                   </>
                 ) : (
