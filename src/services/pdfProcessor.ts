@@ -1,6 +1,6 @@
 import { PDFDocument } from 'pdf-lib';
 import { PaperSize, PageArrangement } from '../types';
-import { paperSizeToPoints, mmToPoints } from '../utils/paperSizes';
+import { paperSizeToPoints, mmToPoints, inchesToPoints } from '../utils/paperSizes';
 
 export async function loadPDF(file: File): Promise<PDFDocument> {
   const arrayBuffer = await file.arrayBuffer();
@@ -64,6 +64,68 @@ export function calculatePageArrangement(
   }
 
   return arrangement;
+}
+
+export async function generateA5BookletPDF(
+  sourcePdf: PDFDocument,
+  spacingMm: number = 0
+): Promise<Uint8Array> {
+  const outputPdf = await PDFDocument.create();
+  const totalPages = sourcePdf.getPageCount();
+
+  const paddedTotal = Math.ceil(totalPages / 4) * 4;
+  const bookletOrder: (number | null)[] = [];
+
+  let lo = 0;
+  let hi = paddedTotal - 1;
+  while (lo <= hi) {
+    bookletOrder.push(hi);
+    bookletOrder.push(lo);
+    lo++;
+    hi--;
+    bookletOrder.push(lo);
+    bookletOrder.push(hi);
+    lo++;
+    hi--;
+  }
+
+  const targetWidth = inchesToPoints(19);
+  const targetHeight = inchesToPoints(13);
+  const spacingPoints = mmToPoints(spacingMm);
+
+  const a5WidthMm = 148;
+  const a5HeightMm = 210;
+  const a5Width = mmToPoints(a5WidthMm);
+  const a5Height = mmToPoints(a5HeightMm);
+
+  const availableWidth = (targetWidth - spacingPoints) / 2;
+  const scale = Math.min(
+    (availableWidth * 0.95) / a5Width,
+    (targetHeight * 0.95) / a5Height
+  );
+
+  const scaledW = a5Width * scale;
+  const scaledH = a5Height * scale;
+
+  for (let sheetSide = 0; sheetSide < bookletOrder.length; sheetSide += 2) {
+    const leftPageIdx = bookletOrder[sheetSide];
+    const rightPageIdx = bookletOrder[sheetSide + 1];
+
+    const sheet = outputPdf.addPage([targetWidth, targetHeight]);
+
+    const drawSlot = async (pageIdx: number | null, slotX: number) => {
+      if (pageIdx === null || pageIdx >= totalPages || pageIdx < 0) return;
+      const [embedded] = await outputPdf.embedPdf(sourcePdf, [pageIdx]);
+      const xOffset = slotX + (availableWidth - scaledW) / 2;
+      const yOffset = (targetHeight - scaledH) / 2;
+      sheet.drawPage(embedded, { x: xOffset, y: yOffset, width: scaledW, height: scaledH });
+    };
+
+    await drawSlot(leftPageIdx, 0);
+    await drawSlot(rightPageIdx, availableWidth + spacingPoints);
+  }
+
+  return await outputPdf.save();
 }
 
 export async function generateArrangedPDF(
